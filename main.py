@@ -2,12 +2,12 @@ from fastapi import FastAPI
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import logging
 
+# Loglama ayarı
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -15,17 +15,23 @@ app = FastAPI()
 
 def get_driver():
     chrome_options = Options()
-    # Render için kritik ayarlar
+    # --- Render için Chromium Ayarları ---
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox") 
-    chrome_options.add_argument("--disable-dev-shm-usage") 
+    chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
     
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    return driver
+    # Sistemdeki Chromium'u kullan
+    chrome_options.binary_location = "/usr/bin/chromium"
+
+    try:
+        service = Service("/usr/bin/chromedriver")
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        return driver
+    except Exception as e:
+        logger.error(f"Driver hatası: {e}")
+        raise e
 
 def fiyat_temizle(fiyat_metni):
     try:
@@ -36,18 +42,16 @@ def fiyat_temizle(fiyat_metni):
 
 @app.get("/")
 def ana_sayfa():
-    return {"durum": "Aktif", "mesaj": "Akıllı Filtre Devrede! /ara?marka=adidas&beden=43"}
+    return {"durum": "Aktif", "mesaj": "Bot Hazır! Sadece en ucuz 5 ürünü getirir."}
 
 @app.get("/ara")
 def ayakkabi_ara(marka: str = "spor", beden: str = "42"):
     driver = None
     sonuclar = []
-    # Arama terimini daha spesifik yapıyoruz
     arama_terimi = f"{marka} erkek ayakkabı {beden}" 
     
     try:
         driver = get_driver()
-        # Trendyol'un kendi arama motorunu kullanıyoruz (En güvenlisi)
         base_url = f"https://www.trendyol.com/sr?q={arama_terimi}&os=1"
         
         logger.info(f"Gidiliyor: {base_url}")
@@ -58,19 +62,16 @@ def ayakkabi_ara(marka: str = "spor", beden: str = "42"):
         
         urunler = driver.find_elements(By.CLASS_NAME, "p-card-wrppr")
         
-        for urun in urunler[:20]: # İlk 20 ürüne bak
+        # İlk 20 ürünü tarıyoruz (elemelerden sonra elimizde en az 5 tane kalsın diye)
+        for urun in urunler[:20]:
             try:
                 marka_ismi = urun.find_element(By.CLASS_NAME, "prdct-desc-cntnr-ttl").text
                 model_ismi = urun.find_element(By.CLASS_NAME, "prdct-desc-cntnr-name").text
                 tam_isim = f"{marka_ismi} {model_ismi}"
-                
                 link = urun.find_element(By.TAG_NAME, "a").get_attribute("href")
                 
-                # --- YENİ ÖZELLİK: BEDEN DOĞRULAMA ---
-                # Eğer ürün başlığında aradığımız numara geçmiyorsa listeye ekleme!
-                # Örneğin 43 aradık ama sonuçta 43 yazmıyorsa (veya 43.5 ise) bunu atlayabiliriz.
+                # Beden doğrulaması (Başlıkta numara yazmıyorsa pas geç)
                 if beden not in tam_isim and beden not in link:
-                     # Bazen başlıkta yazmaz ama linkte yazar, ikisine de baktık.
                      continue 
 
                 try:
@@ -97,11 +98,15 @@ def ayakkabi_ara(marka: str = "spor", beden: str = "42"):
         if driver:
             driver.quit()
 
-    # Fiyata göre sırala
+    # Önce fiyata göre sırala (En ucuz en üstte)
     sirali_sonuclar = sorted(sonuclar, key=lambda x: x['fiyat_sayi'])
+    
+    # BURASI DEĞİŞTİ: Listeyi kesip sadece ilk 5 tanesini alıyoruz
+    ilk_5_sonuc = sirali_sonuclar[:5]
     
     return {
         "aranan_beden": beden,
-        "bulunan_sayisi": len(sirali_sonuclar),
-        "sonuclar": sirali_sonuclar
+        "bulunan_toplam_uygun": len(sirali_sonuclar), # Toplam kaç tane bulduğunu da bilgi olarak verelim
+        "gosterilen": len(ilk_5_sonuc),
+        "sonuclar": ilk_5_sonuc
     }
